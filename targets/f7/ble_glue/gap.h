@@ -16,6 +16,19 @@
 extern "C" {
 #endif
 
+//static const uint8_t adv_swift_bootstrap[] = {
+//    0x02, 0x01, 0x06,
+
+    // Swift Pair Manufacturer Specific Data:
+    // len = 1(type) + 2(CID) + 3(03 00 80) + 10("Flipper KB") = 16 = 0x10
+//    0x10, 0xFF,
+//    0x06, 0x00, 0x03, 0x00, 0x80,
+//    'F','l','i','p','p','e','r',' ','K','B',
+
+//    0x02, 0x0A, 0x00,
+//};
+
+
 typedef enum {
     GapEventTypeConnected,
     GapEventTypeDisconnected,
@@ -82,6 +95,8 @@ typedef struct {
     uint8_t mac_address[GAP_MAC_ADDR_SIZE];
     char adv_name[FURI_HAL_VERSION_DEVICE_NAME_LENGTH];
     GapConnectionParamsRequest conn_param;
+    bool enable_swift_pair;   // NEW
+    bool swift_pair_bootstrap;
 } GapConfig;
 
 typedef struct {

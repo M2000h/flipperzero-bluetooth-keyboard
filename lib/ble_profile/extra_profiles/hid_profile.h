@@ -1,6 +1,7 @@
 #pragma once
 
 #include <furi_ble/profile_interface.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,7 @@ extern "C" {
 typedef struct {
     const char* device_name_prefix; /**< Prefix for device name. Length must be less than 8 */
     uint16_t mac_xor; /**< XOR mask for device address, for uniqueness */
+    bool just_works; // NEW: ask GAP for no-UI pairing
 } BleProfileHidParams;
 
 /** Hid Keyboard Profile descriptor */

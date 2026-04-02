@@ -387,6 +387,7 @@ static GapConfig template_config = {
     .appearance_char = GAP_APPEARANCE_KEYBOARD,
     .bonding_mode = true,
     .pairing_method = GapPairingPinCodeVerifyYesNo,
+    .enable_swift_pair = true,   // ← ВАЖНО
     .conn_param =
         {
             .conn_int_min = CONNECTION_INTERVAL_MIN,
@@ -394,6 +395,7 @@ static GapConfig template_config = {
             .slave_latency = 0,
             .supervisor_timeout = 0,
         },
+    .swift_pair_bootstrap = true,
 };
 
 static void ble_profile_hid_get_config(GapConfig* config, FuriHalBleProfileParams profile_params) {
@@ -412,7 +414,7 @@ static void ble_profile_hid_get_config(GapConfig* config, FuriHalBleProfileParam
     }
 
     // Set advertise name
-    memset(config->adv_name, 0, sizeof(config->adv_name));
+    // memset(config->adv_name, 0, sizeof(config->adv_name));
     FuriString* name = furi_string_alloc_set(furi_hal_version_get_ble_local_device_name_ptr());
 
     const char* clicker_str = "Control";
@@ -423,9 +425,25 @@ static void ble_profile_hid_get_config(GapConfig* config, FuriHalBleProfileParam
     if(furi_string_size(name) >= sizeof(config->adv_name)) {
         furi_string_left(name, sizeof(config->adv_name) - 1);
     }
-    memcpy(config->adv_name, furi_string_get_cstr(name), furi_string_size(name));
+    // memcpy(config->adv_name, furi_string_get_cstr(name), furi_string_size(name));
+    config->adv_name[0] = '\0';
     furi_string_free(name);
-}
+    const char* swift_name = "Flipper Keyboard"; // keep short: mfg_data max is 23 bytes
+    size_t name_len = strlen(swift_name);
+
+    const size_t swift_hdr_len = 5;
+    if(name_len > (sizeof(config->mfg_data) - swift_hdr_len)) {
+        name_len = sizeof(config->mfg_data) - swift_hdr_len;
+    }
+
+//config->mfg_data[0] = 0x06;
+//config->mfg_data[1] = 0x00;
+//config->mfg_data[2] = 0x03;
+//config->mfg_data[3] = 0x00;
+//config->mfg_data[4] = 0x80;
+//config->mfg_data_len = 5;
+
+	}
 
 static const FuriHalBleProfileTemplate profile_callbacks = {
     .start = ble_profile_hid_start,

@@ -16,6 +16,27 @@
 
 #define GAP_INTERVAL_TO_MS(x) (uint16_t)((x) * 1.25)
 
+// Bootstrap ADV: Flags + Swift Pair MFG (with display name) + TxPower (optional)
+static const uint8_t adv_swift_bootstrap[] = {
+    0x02, 0x01, 0x06,
+
+    // Swift Pair Manufacturer Specific Data:
+    // len = 1(type) + 2(CID) + 3(03 00 80) + 10("Flipper KB") = 16 = 0x10
+    0x10, 0xFF,
+    0x06, 0x00, 0x03, 0x00, 0x80,
+    'F','l','i','p','p','e','r',' ','K','B',
+
+    0x02, 0x0A, 0x00,
+};
+
+static const uint8_t adv_hid_normal[] = {
+    0x02, 0x01, 0x06,
+    // HID 0x1812
+    0x03, 0x02, 0x12, 0x18,
+    0x02, 0x0A, 0x00,
+};
+
+
 typedef struct {
     uint16_t gap_svc_handle;
     uint16_t dev_name_char_handle;
@@ -42,6 +63,7 @@ typedef struct {
     bool enable_adv;
     bool is_secure;
     uint8_t negotiation_round;
+    bool swift_bootstrap_active;
 } Gap;
 
 typedef enum {
@@ -49,6 +71,7 @@ typedef enum {
     GapCommandAdvLowPower,
     GapCommandAdvStop,
     GapCommandKillThread,
+    GapCommandRestartAdv,
 } GapCommand;
 
 static Gap* gap = NULL;
@@ -102,7 +125,7 @@ static void gap_verify_connection_parameters(Gap* gap) {
         } else {
             gap->negotiation_round++;
         }
-    } else {
+	    } else {
         FURI_LOG_I(
             TAG,
             "Connection interval suits us. Spent %u rounds to negotiate",
@@ -242,6 +265,15 @@ BleEventFlowStatus ble_event_app_notification(void* pckt) {
         case ACI_GAP_SLAVE_SECURITY_INITIATED_VSEVT_CODE:
             FURI_LOG_D(TAG, "Slave security initiated");
             gap->is_secure = true;
+            if(gap->swift_bootstrap_active) {
+                gap->swift_bootstrap_active = false;
+
+                // Попросим GAP thread перезапустить advertising,
+                // чтобы перейти с Swift Pair bootstrap ADV на обычный HID ADV
+                GapCommand cmd = GapCommandRestartAdv;
+                furi_message_queue_put(gap->command_queue, &cmd, 0);
+                FURI_LOG_I(TAG, "Swift bootstrap -> request adv restart (normal HID)");
+            }
             break;
 
         case ACI_GAP_BOND_LOST_VSEVT_CODE:
@@ -375,8 +407,17 @@ static void gap_init_svc(Gap* gap, const GapRootSecurityKeys* root_keys) {
         FURI_LOG_E(TAG, "Failed updating name characteristic: %d", status);
     }
 
-    uint8_t gap_appearence_char_uuid[2] = {
-        gap->config->appearance_char & 0xff, gap->config->appearance_char >> 8};
+//    uint8_t gap_appearence_char_uuid[2] = {
+//        gap->config->appearance_char & 0xff, gap->config->appearance_char >> 8};
+
+uint16_t appearance = gap->config->appearance_char;
+if(gap->swift_bootstrap_active) {
+    appearance = 0x0000; // Unknown appearance during bootstrap
+}
+
+uint8_t gap_appearence_char_uuid[2] = { appearance & 0xff, appearance >> 8 };
+
+
     status = aci_gatt_update_char_value(
         gap->service.gap_svc_handle,
         gap->service.appearance_char_handle,
@@ -395,15 +436,22 @@ static void gap_init_svc(Gap* gap, const GapRootSecurityKeys* root_keys) {
     if(gap->config->pairing_method == GapPairingPinCodeShow) {
         aci_gap_set_io_capability(IO_CAP_DISPLAY_ONLY);
     } else if(gap->config->pairing_method == GapPairingPinCodeVerifyYesNo) {
+        auth_req_mitm_mode = MITM_PROTECTION_NOT_REQUIRED;
+        auth_req_use_fixed_pin = USE_FIXED_PIN_FOR_PAIRING_FORBIDDEN;
         aci_gap_set_io_capability(IO_CAP_DISPLAY_YES_NO);
         keypress_supported = true;
     } else if(gap->config->pairing_method == GapPairingNone) {
-        // "Just works" pairing method (iOS accepts it, it seems Android and Linux don't)
-        auth_req_mitm_mode = MITM_PROTECTION_NOT_REQUIRED;
-        auth_req_use_fixed_pin = USE_FIXED_PIN_FOR_PAIRING_ALLOWED;
-        // If "just works" isn't supported, we want the numeric comparaison method
-        aci_gap_set_io_capability(IO_CAP_DISPLAY_YES_NO);
-        keypress_supported = true;
+    // True "Just Works": no PIN, no numeric comparison UI
+    auth_req_mitm_mode = MITM_PROTECTION_NOT_REQUIRED;
+
+    // Лучше запретить фиксированный PIN (он как раз может провоцировать PIN-флоу на некоторых хостах)
+    auth_req_use_fixed_pin = USE_FIXED_PIN_FOR_PAIRING_FORBIDDEN;
+
+    // КЛЮЧ: устройство без ввода/вывода -> Just Works
+    aci_gap_set_io_capability(IO_CAP_NO_INPUT_NO_OUTPUT);
+
+    // Keypress не нужен и может провоцировать UI-флоу
+    keypress_supported = false;
     }
     // Setup  authentication
     aci_gap_set_authentication_requirement(
@@ -468,6 +516,53 @@ static void gap_advertise_start(GapState new_state) {
     if(status) {
         FURI_LOG_E(TAG, "set_discoverable failed %d", status);
     }
+
+//static const uint8_t adv_swift_pair[] = {
+    // Flags: LE General Discoverable + BR/EDR Not Supported
+//    0x02, 0x01, 0x06,
+
+    // Incomplete List of 16-bit Service UUIDs: 0x1812 (HID)
+//    0x03, 0x02, 0x12, 0x18,
+
+    // Manufacturer Specific Data (Swift Pair)
+    // len = 1(type=0xFF) + 2(CID) + 1(beacon) + 1(sub) + 1(rssi) + 10(name) = 16 = 0x10
+//    0x10, 0xFF,
+//    0x06, 0x00,       // Microsoft Company ID (0x0006), little-endian
+//    0x03,             // Swift Pair Beacon ID
+//    0x00,             // Sub-scenario: LE only
+//    0x80,             // Reserved RSSI byte
+//    'F','l','i','p','p','e','r',' ','K','B',
+
+    // Tx Power Level (optional)
+//    0x02, 0x0A, 0x00,
+//};
+
+const uint8_t* adv = NULL;
+size_t adv_len = 0;
+
+if(gap->swift_bootstrap_active) {
+    adv = adv_swift_bootstrap;
+    adv_len = sizeof(adv_swift_bootstrap);
+} else {
+    adv = adv_hid_normal;
+    adv_len = sizeof(adv_hid_normal);
+}
+
+tBleStatus st2 = aci_gap_update_adv_data(adv_len, (uint8_t*)adv);
+FURI_LOG_I(TAG, "ADV_SELECT bootstrap=%d st=%d len=%u first=%02X %02X %02X",
+           gap->swift_bootstrap_active, st2, (unsigned)adv_len,
+           adv[0], adv[1], adv[2]);
+
+FURI_LOG_I(TAG, "BOOT_ADV bytes: %02X %02X %02X %02X %02X %02X %02X",
+           adv_swift_bootstrap[0], adv_swift_bootstrap[1], adv_swift_bootstrap[2],
+           adv_swift_bootstrap[3], adv_swift_bootstrap[4], adv_swift_bootstrap[5],
+           adv_swift_bootstrap[6]);
+
+//    tBleStatus st2 = aci_gap_update_adv_data(sizeof(adv_swift_pair), (uint8_t*)adv_swift_pair);
+//    FURI_LOG_I(TAG, "SWIFT_ADV st=%d len=%u first=%02X %02X %02X",
+//           st2, (unsigned)sizeof(adv_swift_pair),
+//           adv_swift_pair[0], adv_swift_pair[1], adv_swift_pair[2]);
+
     gap->state = new_state;
     GapEvent event = {.type = GapEventTypeStartAdvertising};
     gap->on_event_cb(event, gap->context);
@@ -564,6 +659,8 @@ bool gap_init(
 
     // Set initial state
     gap->is_secure = false;
+    //gap->swift_bootstrap_active = gap->config->swift_pair_bootstrap;
+    gap->swift_bootstrap_active = true;
     gap->negotiation_round = 0;
 
     if(gap->config->mfg_data_len > 0) {
@@ -648,6 +745,11 @@ static int32_t gap_app(void* context) {
             gap_advertise_start(GapStateAdvLowPower);
         } else if(command == GapCommandAdvStop) {
             gap_advertise_stop();
+        } else if(command == GapCommandRestartAdv) {
+                gap_advertise_stop();
+                // Верни состояние в idle и стартани fast advertising
+                gap->state = GapStateStartingAdv;
+                gap_advertise_start(GapStateAdvFast); // или как у тебя вызывается fast старт
         }
         furi_check(furi_mutex_release(gap->state_mutex) == FuriStatusOk);
     }
